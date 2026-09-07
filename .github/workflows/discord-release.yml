@@ -9,61 +9,51 @@ jobs:
   notify:
     runs-on: ubuntu-latest
     steps:
-      - name: 讀取最新 Release
-        id: rel
+      - name: 組訊息並送出
         env:
+          WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+          MENTION: ${{ secrets.DISCORD_MENTION }}
+          REPO: ${{ github.repository }}
           EVENT: ${{ github.event_name }}
         run: |
-          DATA=$(curl -sS -H "User-Agent: HaWaTool" -H "Accept: application/vnd.github+json" \
-            "https://api.github.com/repos/${{ github.repository }}/releases/latest")
-          echo "$DATA" > /tmp/rel.json
-          TAG=$(python3 -c "import json;print(json.load(open('/tmp/rel.json')).get('tag_name',''))")
-          UPD=$(python3 -c "import json;print(json.load(open('/tmp/rel.json')).get('updated_at',''))")
-          echo "tag=$TAG" >> $GITHUB_OUTPUT
-          echo "updated=$UPD" >> $GITHUB_OUTPUT
-          if [ "$EVENT" = "schedule" ]; then
-            python3 - <<'PY'
-          import os
-          from datetime import datetime, timezone
-          upd = os.environ.get("UPD") or open("/tmp/upd.txt").read() if False else None
-          PY
-          fi
+          set -e
+          curl -sS -A "HaWaTool" -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${REPO}/releases/latest" -o /tmp/rel.json
+
           python3 - <<'PY'
-          import json, os
+          import json, os, sys
           from datetime import datetime, timezone
           rel = json.load(open("/tmp/rel.json"))
-          event = os.environ["EVENT"]
-          if event == "schedule":
-              ts = datetime.fromisoformat(rel["updated_at"].replace("Z","+00:00"))
-              if (datetime.now(timezone.utc) - ts).total_seconds() > 15*60:
-                  open("/tmp/skip","w").write("1")
-                  print("略過")
+          if os.environ.get("EVENT") == "schedule":
+              ts = datetime.fromisoformat(rel["updated_at"].replace("Z", "+00:00"))
+              if (datetime.now(timezone.utc) - ts).total_seconds() > 15 * 60:
+                  print("最近沒改 Release，略過")
+                  sys.exit(0)
+          mention = (os.environ.get("MENTION") or "").strip()
           body = (rel.get("body") or "")[:1200]
-          mention = os.environ.get("MENTION","")
           lines = []
-          if mention.strip():
-              lines.append(mention.strip())
+          if mention:
+              lines.append(mention)
           lines.append(f"**HaWaTool 更新播報：{rel.get('tag_name')}**")
           lines.append(rel.get("html_url") or "")
           if body:
               lines.append("")
               lines.append(body)
-          json.dump({"content":"\n".join(lines),"allowed_mentions":{"parse":["roles","everyone","users"]}}, open("/tmp/payload.json","w"), ensure_ascii=False)
+          json.dump(
+              {"content": "\n".join(lines), "allowed_mentions": {"parse": ["roles", "everyone", "users"]}},
+              open("/tmp/payload.json", "w"),
+              ensure_ascii=False,
+          )
           PY
-        env:
-          EVENT: ${{ github.event_name }}
-          MENTION: ${{ secrets.DISCORD_MENTION }}
 
-      - name: 送到 Discord
-        if: hashFiles('/tmp/skip') == ''
-        env:
-          WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
-        run: |
+          if [ ! -f /tmp/payload.json ]; then
+            echo "略過發送"
+            exit 0
+          fi
           test -n "$WEBHOOK" || { echo "缺少 DISCORD_WEBHOOK"; exit 1; }
-          curl -sS -f \
-            -A "Mozilla/5.0 (compatible; HaWaTool/1.0)" \
+          curl -sS -f -A "Mozilla/5.0 (compatible; HaWaTool/1.0)" \
             -H "Content-Type: application/json" \
             -d @/tmp/payload.json \
             "$WEBHOOK"
           echo
-          echo "已發送"
+          echo OK
