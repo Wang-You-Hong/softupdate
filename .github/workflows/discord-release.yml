@@ -4,6 +4,11 @@ on:
   release:
     types: [edited, published]
   workflow_dispatch:
+    inputs:
+      release_name:
+        description: "要播報的版本，例如 v1.4.3"
+        required: true
+        default: "v1.4.3"
 
 jobs:
   notify:
@@ -15,3 +20,4 @@ jobs:
           content: ${{ secrets.DISCORD_MENTION }}
           username: HaWaTool 更新
           color: "3447003"
+          release_name: ${{ github.event.inputs.release_name || github.event.release.tag_name }}
