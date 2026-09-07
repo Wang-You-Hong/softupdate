@@ -2,55 +2,15 @@ name: Discord 更新播報
 
 on:
   release:
-    types: [published]
+    types: [edited, published]
 
 jobs:
   notify:
     runs-on: ubuntu-latest
     steps:
-      - name: 發送到 Discord
-        env:
-          WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
-          MENTION: ${{ secrets.DISCORD_MENTION }}
-          TAG: ${{ github.event.release.tag_name }}
-          URL: ${{ github.event.release.html_url }}
-          NAME: ${{ github.event.release.name }}
-          BODY: ${{ github.event.release.body }}
-        run: |
-          python3 - <<'PY'
-          import json, os, urllib.request
-          webhook = (os.environ.get("WEBHOOK") or "").strip()
-          if not webhook:
-              raise SystemExit("缺少 Secrets：DISCORD_WEBHOOK")
-          mention = (os.environ.get("MENTION") or "").strip()
-          tag = os.environ.get("TAG") or ""
-          url = os.environ.get("URL") or ""
-          name = os.environ.get("NAME") or tag
-          body = (os.environ.get("BODY") or "").strip()
-          if len(body) > 1200:
-              body = body[:1200] + "…"
-          lines = []
-          if mention:
-              lines.append(mention)
-          lines.append(f"**HaWaTool 有新版本：{tag}**")
-          if name and name != tag:
-              lines.append(name)
-          if url:
-              lines.append(url)
-          if body:
-              lines.append("")
-              lines.append(body)
-          payload = {
-              "content": "\n".join(lines),
-              "allowed_mentions": {"parse": ["roles", "everyone", "users"]},
-          }
-          req = urllib.request.Request(
-              webhook,
-              data=json.dumps(payload).encode("utf-8"),
-              headers={"Content-Type": "application/json"},
-              method="POST",
-          )
-          with urllib.request.urlopen(req, timeout=30) as resp:
-              resp.read()
-          print("Discord 已發送")
-          PY
+      - uses: SethCohen/github-releases-to-discord@v1
+        with:
+          webhook_url: ${{ secrets.DISCORD_WEBHOOK }}
+          content: ${{ secrets.DISCORD_MENTION }}
+          username: HaWaTool 更新
+          color: "3447003"
