@@ -21,26 +21,45 @@ jobs:
             "https://api.github.com/repos/${REPO}/releases/latest" -o /tmp/rel.json
 
           python3 - <<'PY'
-          import json, os, sys
+          import json, os, re, sys
           from datetime import datetime, timezone
+
+          def to_discord(text: str) -> str:
+              text = (text or "").replace("\r\n", "\n")
+              out = []
+              for line in text.split("\n"):
+                  s = line.rstrip()
+                  m = re.match(r"^(#{1,6})\s+(.*)$", s)
+                  if m:
+                      out.append("**" + m.group(2).strip() + "**")
+                  else:
+                      out.append(s)
+              text = re.sub(r"\n{3,}", "\n\n", "\n".join(out))
+              return text[:1900]
+
           rel = json.load(open("/tmp/rel.json"))
           if os.environ.get("EVENT") == "schedule":
               ts = datetime.fromisoformat(rel["updated_at"].replace("Z", "+00:00"))
               if (datetime.now(timezone.utc) - ts).total_seconds() > 15 * 60:
                   print("最近沒改 Release，略過")
                   sys.exit(0)
+
           mention = (os.environ.get("MENTION") or "").strip()
-          body = (rel.get("body") or "")[:1200]
+          body = to_discord(rel.get("body") or "")
           lines = []
           if mention:
               lines.append(mention)
-          lines.append(f"**HaWaTool 更新播報：{rel.get('tag_name')}**")
+          lines.append("**HaWaTool 更新播報：" + str(rel.get("tag_name") or "") + "**")
           if body:
               lines.append("")
               lines.append(body)
+
           json.dump(
-              {"content": "\n".join(lines), "allowed_mentions": {"parse": ["roles", "everyone", "users"]}},
-              open("/tmp/payload.json", "w"),
+              {
+                  "content": "\n".join(lines),
+                  "allowed_mentions": {"parse": ["roles", "everyone", "users"]},
+              },
+              open("/tmp/payload.json", "w", encoding="utf-8"),
               ensure_ascii=False,
           )
           PY
