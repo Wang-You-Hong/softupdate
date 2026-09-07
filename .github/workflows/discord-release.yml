@@ -9,77 +9,61 @@ jobs:
   notify:
     runs-on: ubuntu-latest
     steps:
-      - name: 送到 Discord
+      - name: 讀取最新 Release
+        id: rel
         env:
-          WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
-          MENTION: ${{ secrets.DISCORD_MENTION }}
-          REPO: ${{ github.repository }}
           EVENT: ${{ github.event_name }}
         run: |
-          python3 - <<'PY'
-          import json, os, traceback, urllib.error, urllib.request
+          DATA=$(curl -sS -H "User-Agent: HaWaTool" -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${{ github.repository }}/releases/latest")
+          echo "$DATA" > /tmp/rel.json
+          TAG=$(python3 -c "import json;print(json.load(open('/tmp/rel.json')).get('tag_name',''))")
+          UPD=$(python3 -c "import json;print(json.load(open('/tmp/rel.json')).get('updated_at',''))")
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "updated=$UPD" >> $GITHUB_OUTPUT
+          if [ "$EVENT" = "schedule" ]; then
+            python3 - <<'PY'
+          import os
           from datetime import datetime, timezone
-
-          try:
-              webhook = (os.environ.get("WEBHOOK") or "").strip()
-              if not webhook.startswith("https://discord.com/api/webhooks/"):
-                  raise SystemExit("DISCORD_WEBHOOK 沒設或不是 Discord Webhook 網址")
-
-              repo = os.environ.get("REPO") or "Wang-You-Hong/softupdate"
-              event = os.environ.get("EVENT") or ""
-
-              req = urllib.request.Request(
-                  f"https://api.github.com/repos/{repo}/releases/latest",
-                  headers={
-                      "User-Agent": "HaWaTool-Announce",
-                      "Accept": "application/vnd.github+json",
-                  },
-              )
-              with urllib.request.urlopen(req, timeout=30) as resp:
-                  rel = json.loads(resp.read().decode("utf-8"))
-
-              if event == "schedule":
-                  updated = rel.get("updated_at") or rel.get("published_at") or ""
-                  ts = datetime.fromisoformat(updated.replace("Z", "+00:00"))
-                  age = (datetime.now(timezone.utc) - ts).total_seconds()
-                  if age > 15 * 60:
-                      print("最近沒更新 Release，略過")
-                      raise SystemExit(0)
-
-              mention = (os.environ.get("MENTION") or "").strip()
-              tag = rel.get("tag_name") or ""
-              url = rel.get("html_url") or ""
-              body = (rel.get("body") or "").strip()
-              if len(body) > 1200:
-                  body = body[:1200] + "…"
-
-              lines = []
-              if mention:
-                  lines.append(mention)
-              lines.append(f"**HaWaTool 更新播報：{tag}**")
-              if url:
-                  lines.append(url)
-              if body:
-                  lines.append("")
-                  lines.append(body)
-
-              payload = json.dumps({
-                  "content": "\n".join(lines),
-                  "allowed_mentions": {"parse": ["roles", "everyone", "users"]},
-              }).encode("utf-8")
-              req = urllib.request.Request(
-                  webhook,
-                  data=payload,
-                  headers={"Content-Type": "application/json"},
-                  method="POST",
-              )
-              with urllib.request.urlopen(req, timeout=30) as resp:
-                  print("Discord HTTP", resp.status)
-              print("已發送", tag)
-          except urllib.error.HTTPError as e:
-              print("HTTPError", e.code, e.read()[:300])
-              raise
-          except Exception:
-              traceback.print_exc()
-              raise
+          upd = os.environ.get("UPD") or open("/tmp/upd.txt").read() if False else None
           PY
+          fi
+          python3 - <<'PY'
+          import json, os
+          from datetime import datetime, timezone
+          rel = json.load(open("/tmp/rel.json"))
+          event = os.environ["EVENT"]
+          if event == "schedule":
+              ts = datetime.fromisoformat(rel["updated_at"].replace("Z","+00:00"))
+              if (datetime.now(timezone.utc) - ts).total_seconds() > 15*60:
+                  open("/tmp/skip","w").write("1")
+                  print("略過")
+          body = (rel.get("body") or "")[:1200]
+          mention = os.environ.get("MENTION","")
+          lines = []
+          if mention.strip():
+              lines.append(mention.strip())
+          lines.append(f"**HaWaTool 更新播報：{rel.get('tag_name')}**")
+          lines.append(rel.get("html_url") or "")
+          if body:
+              lines.append("")
+              lines.append(body)
+          json.dump({"content":"\n".join(lines),"allowed_mentions":{"parse":["roles","everyone","users"]}}, open("/tmp/payload.json","w"), ensure_ascii=False)
+          PY
+        env:
+          EVENT: ${{ github.event_name }}
+          MENTION: ${{ secrets.DISCORD_MENTION }}
+
+      - name: 送到 Discord
+        if: hashFiles('/tmp/skip') == ''
+        env:
+          WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+        run: |
+          test -n "$WEBHOOK" || { echo "缺少 DISCORD_WEBHOOK"; exit 1; }
+          curl -sS -f \
+            -A "Mozilla/5.0 (compatible; HaWaTool/1.0)" \
+            -H "Content-Type: application/json" \
+            -d @/tmp/payload.json \
+            "$WEBHOOK"
+          echo
+          echo "已發送"
