@@ -2,22 +2,99 @@ name: Discord 更新播報
 
 on:
   release:
-    types: [edited, published]
+    types: [published, edited, released, created]
   workflow_dispatch:
     inputs:
       release_name:
-        description: "要播報的版本，例如 v1.4.3"
+        description: "手動播報的版本，例如 v1.4.3"
         required: true
         default: "v1.4.3"
+  schedule:
+    - cron: "*/10 * * * *"
 
 jobs:
   notify:
     runs-on: ubuntu-latest
     steps:
-      - uses: SethCohen/github-releases-to-discord@v1
-        with:
-          webhook_url: ${{ secrets.DISCORD_WEBHOOK }}
-          content: ${{ secrets.DISCORD_MENTION }}
-          username: HaWaTool 更新
-          color: "3447003"
-          release_name: ${{ github.event.inputs.release_name || github.event.release.tag_name }}
+      - name: 送到 Discord
+        env:
+          WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+          MENTION: ${{ secrets.DISCORD_MENTION }}
+          EVENT: ${{ github.event_name }}
+          TAG: ${{ github.event.release.tag_name || github.event.inputs.release_name }}
+          URL: ${{ github.event.release.html_url }}
+          NAME: ${{ github.event.release.name }}
+          BODY: ${{ github.event.release.body }}
+          REPO: ${{ github.repository }}
+        run: |
+          python3 - <<'PY'
+          import json, os, urllib.request
+          from datetime import datetime, timezone
+
+          webhook = (os.environ.get("WEBHOOK") or "").strip()
+          if not webhook:
+              raise SystemExit("缺少 DISCORD_WEBHOOK")
+
+          event = os.environ.get("EVENT") or ""
+          tag = (os.environ.get("TAG") or "").strip()
+          url = (os.environ.get("URL") or "").strip()
+          name = (os.environ.get("NAME") or "").strip()
+          body = (os.environ.get("BODY") or "").strip()
+          repo = os.environ.get("REPO") or "Wang-You-Hong/softupdate"
+
+          def get_latest():
+              req = urllib.request.Request(
+                  f"https://api.github.com/repos/{repo}/releases/latest",
+                  headers={"User-Agent": "HaWaTool", "Accept": "application/vnd.github+json"},
+              )
+              with urllib.request.urlopen(req, timeout=30) as r:
+                  return json.loads(r.read().decode())
+
+          rel = None
+          if event == "schedule" or not tag:
+              rel = get_latest()
+              updated = rel.get("updated_at") or rel.get("published_at") or ""
+              # 排程：只播最近 12 分鐘內有改過的，避免每 10 分鐘洗頻
+              if event == "schedule":
+                  try:
+                      ts = datetime.fromisoformat(updated.replace("Z", "+00:00"))
+                      age = (datetime.now(timezone.utc) - ts).total_seconds()
+                      if age > 12 * 60:
+                          print(f"無需播報（最後更新 {updated}）")
+                          raise SystemExit(0)
+                  except SystemExit:
+                      raise
+                  except Exception as e:
+                      print(e)
+              tag = rel.get("tag_name") or tag
+              url = rel.get("html_url") or url
+              name = rel.get("name") or name
+              body = rel.get("body") or body
+
+          mention = (os.environ.get("MENTION") or "").strip()
+          if len(body) > 1200:
+              body = body[:1200] + "…"
+          lines = []
+          if mention:
+              lines.append(mention)
+          lines.append(f"**HaWaTool 更新播報：{tag}**")
+          if name and name != tag:
+              lines.append(name)
+          if url:
+              lines.append(url)
+          if body:
+              lines.append("")
+              lines.append(body)
+          payload = {
+              "content": "\n".join(lines),
+              "allowed_mentions": {"parse": ["roles", "everyone", "users"]},
+          }
+          req = urllib.request.Request(
+              webhook,
+              data=json.dumps(payload).encode(),
+              headers={"Content-Type": "application/json"},
+              method="POST",
+          )
+          urllib.request.urlopen(req, timeout=30).read()
+          print("已發送", tag, event)
+          PY
