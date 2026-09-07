@@ -35,7 +35,6 @@ jobs:
           if mention:
               lines.append(mention)
           lines.append(f"**HaWaTool 更新播報：{rel.get('tag_name')}**")
-          lines.append(rel.get("html_url") or "")
           if body:
               lines.append("")
               lines.append(body)
