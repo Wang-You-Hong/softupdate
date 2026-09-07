@@ -4,70 +4,82 @@ on:
   schedule:
     - cron: "*/10 * * * *"
   workflow_dispatch:
-    inputs:
-      release_name:
-        description: "要播報的版本，空白＝最新版"
-        required: false
-        default: ""
 
 jobs:
   notify:
     runs-on: ubuntu-latest
     steps:
-      - name: 檢查並播報最新 Release
+      - name: 送到 Discord
         env:
           WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
           MENTION: ${{ secrets.DISCORD_MENTION }}
           REPO: ${{ github.repository }}
-          MANUAL_TAG: ${{ github.event.inputs.release_name }}
           EVENT: ${{ github.event_name }}
         run: |
           python3 - <<'PY'
-          import json, os, urllib.request
+          import json, os, traceback, urllib.error, urllib.request
           from datetime import datetime, timezone
 
-          webhook = (os.environ.get("WEBHOOK") or "").strip()
-          if not webhook:
-              raise SystemExit("缺少 DISCORD_WEBHOOK")
-          repo = os.environ.get("REPO")
-          event = os.environ.get("EVENT")
-          manual = (os.environ.get("MANUAL_TAG") or "").strip()
+          try:
+              webhook = (os.environ.get("WEBHOOK") or "").strip()
+              if not webhook.startswith("https://discord.com/api/webhooks/"):
+                  raise SystemExit("DISCORD_WEBHOOK 沒設或不是 Discord Webhook 網址")
 
-          req = urllib.request.Request(
-              f"https://api.github.com/repos/{repo}/releases/latest",
-              headers={"User-Agent": "HaWaTool", "Accept": "application/vnd.github+json"},
-          )
-          with urllib.request.urlopen(req, timeout=30) as r:
-              rel = json.loads(r.read().decode())
+              repo = os.environ.get("REPO") or "Wang-You-Hong/softupdate"
+              event = os.environ.get("EVENT") or ""
 
-          if event == "schedule":
-              updated = rel.get("updated_at") or ""
-              ts = datetime.fromisoformat(updated.replace("Z", "+00:00"))
-              if (datetime.now(timezone.utc) - ts).total_seconds() > 12 * 60:
-                  print("最近沒改 Release，略過")
-                  raise SystemExit(0)
+              req = urllib.request.Request(
+                  f"https://api.github.com/repos/{repo}/releases/latest",
+                  headers={
+                      "User-Agent": "HaWaTool-Announce",
+                      "Accept": "application/vnd.github+json",
+                  },
+              )
+              with urllib.request.urlopen(req, timeout=30) as resp:
+                  rel = json.loads(resp.read().decode("utf-8"))
 
-          mention = (os.environ.get("MENTION") or "").strip()
-          tag = rel.get("tag_name") or ""
-          body = (rel.get("body") or "")[:1200]
-          lines = []
-          if mention:
-              lines.append(mention)
-          lines.append(f"**HaWaTool 更新播報：{tag}**")
-          lines.append(rel.get("html_url") or "")
-          if body:
-              lines.append("")
-              lines.append(body)
-          payload = {
-              "content": "\n".join(lines),
-              "allowed_mentions": {"parse": ["roles", "everyone", "users"]},
-          }
-          req = urllib.request.Request(
-              os.environ["WEBHOOK"],
-              data=json.dumps(payload).encode(),
-              headers={"Content-Type": "application/json"},
-              method="POST",
-          )
-          urllib.request.urlopen(req, timeout=30).read()
-          print("已發送", tag)
+              if event == "schedule":
+                  updated = rel.get("updated_at") or rel.get("published_at") or ""
+                  ts = datetime.fromisoformat(updated.replace("Z", "+00:00"))
+                  age = (datetime.now(timezone.utc) - ts).total_seconds()
+                  if age > 15 * 60:
+                      print("最近沒更新 Release，略過")
+                      raise SystemExit(0)
+
+              mention = (os.environ.get("MENTION") or "").strip()
+              tag = rel.get("tag_name") or ""
+              url = rel.get("html_url") or ""
+              body = (rel.get("body") or "").strip()
+              if len(body) > 1200:
+                  body = body[:1200] + "…"
+
+              lines = []
+              if mention:
+                  lines.append(mention)
+              lines.append(f"**HaWaTool 更新播報：{tag}**")
+              if url:
+                  lines.append(url)
+              if body:
+                  lines.append("")
+                  lines.append(body)
+
+              payload = json.dumps({
+                  "content": "\n".join(lines),
+                  "allowed_mentions": {"parse": ["roles", "everyone", "users"]},
+              }).encode("utf-8")
+              req = urllib.request.Request(
+                  webhook,
+                  data=payload,
+                  headers={"Content-Type": "application/json"},
+                  method="POST",
+              )
+              with urllib.request.urlopen(req, timeout=30) as resp:
+                  print("Discord HTTP", resp.status)
+              print("已發送", tag)
+          except urllib.error.HTTPError as e:
+              print("HTTPError", e.code, e.read()[:300])
+              raise
+          except Exception:
+              traceback.print_exc()
+              raise
           PY
